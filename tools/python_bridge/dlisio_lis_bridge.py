@@ -64,6 +64,8 @@ def read_summary(path: str) -> Dict[str, Any]:
 def write_raw_copy(input_path: str, output_path: str) -> Dict[str, Any]:
     src = Path(input_path)
     dst = Path(output_path)
+    if src.resolve() == dst.resolve():
+        raise RuntimeError("input и output указывают на один и тот же файл")
     dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(str(src), str(dst))
     return {

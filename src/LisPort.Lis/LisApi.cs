@@ -1,6 +1,8 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Security.Cryptography;
+using System.Text;
 using LisPort.Common;
 using LisPort.Core;
 
@@ -15,6 +17,8 @@ namespace LisPort.Lis
             OutputDirectory = Path.Combine(Path.GetTempPath(), "lis_port");
             ErrorHandler = new ErrorHandler();
             IncludeCurves = true;
+            BridgeTimeoutMilliseconds = 120000;
+            MaxBridgeOutputChars = 200000;
         }
 
         public string PythonExecutablePath { get; set; }
@@ -22,6 +26,8 @@ namespace LisPort.Lis
         public string OutputDirectory { get; set; }
         public ErrorHandler ErrorHandler { get; set; }
         public bool IncludeCurves { get; set; }
+        public int BridgeTimeoutMilliseconds { get; set; }
+        public int MaxBridgeOutputChars { get; set; }
     }
 
     public sealed class LisSummaryResult
@@ -34,6 +40,24 @@ namespace LisPort.Lis
 
         public string SourcePath { get; private set; }
         public string SummaryJson { get; private set; }
+    }
+
+    public sealed class LisWriteResult
+    {
+        public LisWriteResult(string inputPath, string outputPath, string inputSha256, string outputSha256, long bytes)
+        {
+            InputPath = inputPath;
+            OutputPath = outputPath;
+            InputSha256 = inputSha256;
+            OutputSha256 = outputSha256;
+            Bytes = bytes;
+        }
+
+        public string InputPath { get; private set; }
+        public string OutputPath { get; private set; }
+        public string InputSha256 { get; private set; }
+        public string OutputSha256 { get; private set; }
+        public long Bytes { get; private set; }
     }
 
     public static class LisApi
@@ -64,7 +88,7 @@ namespace LisPort.Lis
             return new LisSummaryResult(lisPath, json);
         }
 
-        public static void WriteRawCopy(string inputLisPath, string outputLisPath, LisLoadOptions options = null)
+        public static LisWriteResult WriteRawCopy(string inputLisPath, string outputLisPath, LisLoadOptions options = null)
         {
             ValidateInputPath(inputLisPath);
             if (string.IsNullOrWhiteSpace(outputLisPath))
@@ -85,18 +109,19 @@ namespace LisPort.Lis
 
             var runOptions = ToRunOptions(effectiveOptions);
             PythonBridge.Run(request, runOptions);
+            return ValidateWrittenCopy(inputLisPath, outputFullPath);
         }
 
-        public static void WriteFromSummary(string summaryJsonPath, string outputLisPath, LisLoadOptions options = null)
+        public static LisWriteResult WriteFromSummary(string summaryJsonPath, string outputLisPath, LisLoadOptions options = null)
         {
             if (string.IsNullOrWhiteSpace(summaryJsonPath))
             {
                 throw new ArgumentException("Путь к summary не должен быть пустым.", "summaryJsonPath");
             }
-
-            if (!File.Exists(summaryJsonPath))
+            var summaryFullPath = Path.GetFullPath(summaryJsonPath);
+            if (!File.Exists(summaryFullPath))
             {
-                throw new FileNotFoundException("Summary JSON не найден.", summaryJsonPath);
+                throw new FileNotFoundException("Summary JSON не найден.", summaryFullPath);
             }
 
             if (string.IsNullOrWhiteSpace(outputLisPath))
@@ -111,12 +136,13 @@ namespace LisPort.Lis
             var request = new BridgeRequest
             {
                 Mode = "write-from-summary",
-                LisInputPath = Path.GetFullPath(summaryJsonPath),
+                LisInputPath = summaryFullPath,
                 OutputPath = outputFullPath
             };
 
             var runOptions = ToRunOptions(effectiveOptions);
             PythonBridge.Run(request, runOptions);
+            return ValidateWrittenCopy(summaryJsonPath, outputFullPath, isSummaryInput: true);
         }
 
         public static int RunSmokeParity(string lisPath, string repoRoot = null, LisLoadOptions options = null)
@@ -124,6 +150,10 @@ namespace LisPort.Lis
             ValidateInputPath(lisPath);
             var effectiveOptions = options ?? new LisLoadOptions();
             var root = string.IsNullOrWhiteSpace(repoRoot) ? Environment.CurrentDirectory : repoRoot;
+            if (!Directory.Exists(root))
+            {
+                throw new DirectoryNotFoundException("Корневая директория репозитория не найдена: " + root);
+            }
             var script = Path.Combine(root, "tools", "python_bridge", "smoke_parity.py");
             if (!File.Exists(script))
             {
@@ -185,8 +215,60 @@ namespace LisPort.Lis
             {
                 PythonExecutablePath = options.PythonExecutablePath,
                 BridgeScriptPath = options.BridgeScriptPath,
-                ErrorHandler = options.ErrorHandler
+                ErrorHandler = options.ErrorHandler,
+                TimeoutMilliseconds = options.BridgeTimeoutMilliseconds,
+                MaxCapturedOutputChars = options.MaxBridgeOutputChars
             };
+        }
+
+        private static LisWriteResult ValidateWrittenCopy(string inputPath, string outputPath, bool isSummaryInput = false)
+        {
+            if (!File.Exists(outputPath))
+            {
+                throw new InvalidOperationException("После записи output-файл не найден: " + outputPath);
+            }
+
+            var outInfo = new FileInfo(outputPath);
+            var outputSha = ComputeSha256(outputPath);
+
+            if (!isSummaryInput)
+            {
+                var inputSha = ComputeSha256(inputPath);
+                if (!string.Equals(inputSha, outputSha, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidOperationException(
+                        "Контроль целостности не пройден: SHA-256 input и output отличаются.");
+                }
+
+                return new LisWriteResult(
+                    Path.GetFullPath(inputPath),
+                    Path.GetFullPath(outputPath),
+                    inputSha,
+                    outputSha,
+                    outInfo.Length);
+            }
+
+            return new LisWriteResult(
+                Path.GetFullPath(inputPath),
+                Path.GetFullPath(outputPath),
+                inputSha256: string.Empty,
+                outputSha256: outputSha,
+                bytes: outInfo.Length);
+        }
+
+        private static string ComputeSha256(string path)
+        {
+            using (var stream = File.OpenRead(path))
+            using (var sha = SHA256.Create())
+            {
+                var hash = sha.ComputeHash(stream);
+                var sb = new StringBuilder(hash.Length * 2);
+                foreach (var b in hash)
+                {
+                    sb.Append(b.ToString("x2"));
+                }
+                return sb.ToString();
+            }
         }
 
         private static string Quote(string value)
