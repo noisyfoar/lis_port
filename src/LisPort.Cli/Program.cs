@@ -38,8 +38,11 @@ namespace LisPort.Cli
                     }
 
                     var outputPath = args[2];
-                    LisApi.WriteRawCopy(args[1], outputPath, options);
+                    var result = LisApi.WriteRawCopy(args[1], outputPath, options);
                     Console.WriteLine("Готово: создана raw-копия LIS файла: " + outputPath);
+                    Console.WriteLine("SHA-256 input : " + result.InputSha256);
+                    Console.WriteLine("SHA-256 output: " + result.OutputSha256);
+                    Console.WriteLine("Байт записано : " + result.Bytes);
                     return 0;
                 }
 
@@ -53,8 +56,10 @@ namespace LisPort.Cli
 
                     var summaryPath = args[1];
                     var outputPath = args[2];
-                    LisApi.WriteFromSummary(summaryPath, outputPath, options);
+                    var result = LisApi.WriteFromSummary(summaryPath, outputPath, options);
                     Console.WriteLine("Готово: файл записан из summary: " + outputPath);
+                    Console.WriteLine("SHA-256 output: " + result.OutputSha256);
+                    Console.WriteLine("Байт записано : " + result.Bytes);
                     return 0;
                 }
 
