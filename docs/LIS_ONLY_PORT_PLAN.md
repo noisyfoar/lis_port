@@ -67,6 +67,10 @@
 - `tests/LisPort.Tests`
   - unit + integration + parity tests.
 
+Текущая реализация в этой ветке использует Python bridge к upstream `dlisio`
+как референсный runtime для read/write parity. Это выбранный путь для
+достижения точного соответствия поведения на старте проекта под `.NET Framework 4.8`.
+
 ## 4) Порядок реализации
 
 ### Этап A — каркас и контракты
